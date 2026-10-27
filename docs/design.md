@@ -58,8 +58,11 @@ A profile identifies the bytes the task starts from in one of two ways:
 - **git:** a commit, resolved with `git ls-tree` in the repository passed to
   `compute`.
 - **manifest:** a hashed list of files with verified copies, for working trees
-  with uncommitted changes. `taskprofile manifest` writes one. Its hash depends
-  only on the captured bytes.
+  with uncommitted changes. `taskprofile manifest` writes one, and its hash
+  depends only on the captured bytes. It skips:
+  - symlinked files, which are listed under `skipped_symlinks`;
+  - its own output folder;
+  - any folder that already holds a `baseline-manifest.json`.
 
 A repository path without a commit is recorded as unknown. `compute` never reads
 the current working tree as snapshot data. Authority documents (contracts,
@@ -84,7 +87,7 @@ assignment is a separate record, joined to the profile by `task_revision` (see
 | `obligations` | declaration-dependent | count per kind; total over the declared kinds; the kinds declared |
 | `verification` | declaration-dependent | count, count per kind, executable checks, judgment checks |
 | `lists` | declaration-dependent | counts of exclusions, interfaces, uncertainties, dependencies |
-| `context_burden` | computed | known bytes of packet plus authority documents plus resolved read set; whether all components are known |
+| `context_burden` | computed | known bytes of packet plus authority documents plus resolved read set; `unresolved_read_items`; `complete` only when every component is known and every read-set item resolved |
 | `packet` | text | bytes and words of the source documents |
 | `mentions` | text mention | crates, repository paths and commits mentioned in the packet text (weak, kept separate) |
 | `task_revision` | computed | `<task_id>@<16 hex>`: hash of schema, task_id, stage, target_role, the source documents' sha256 values and the snapshot identity (commit or manifest hash). The same packet at another snapshot, or for another role, is another revision. |
@@ -97,8 +100,11 @@ independent-review, manual (judgment); other.
 `taskprofile validate` checks structure and types, not truth:
 
 - `task_id` matches `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`, so it is safe as a file name.
-- Every field has a valid status, and `value` is present exactly when the status
-  is declared.
+- **Every required field is present,** with one of the four statuses. A missing
+  field is an error from both `compute` and `validate`, not a crash.
+- `value` is present exactly when the status is declared.
+- **At most one snapshot:** declaring both git and a manifest is an error, and
+  `compute` then uses neither.
 - **Declared values have the right type:**
   - lists of non-empty strings for the scope, obligation and list fields;
   - `{text, path}` items for the read set;

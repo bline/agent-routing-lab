@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 SCHEMA_ID = "task-profile/v0"
-EXTRACTOR = {"name": "taskprofile.py", "version": "0.2.0"}
+EXTRACTOR = {"name": "taskprofile.py", "version": "0.2.1"}
 STATUSES = ("declared", "none", "not_applicable", "unknown")
 WORK_TYPES = ("implementation", "planning", "investigation", "qualification", "review",
               "authority-preparation", "documentation", "other")
@@ -44,6 +44,12 @@ AUTHORITY_KINDS = ("authority", "contract", "proposal", "clarification", "plan",
 DECLARED_KEYS = ("objective", "read_set", "expected_write_set", "interfaces", "exclusions", "verification",
                  "uncertainties", "dependencies") + tuple(f"obligations.{k}" for k in OBLIGATION_KINDS)
 STAGE_A_ALLOWED = {"objective"}
+REQUIRED_FIELDS = (("identity", "parent_task_id"), ("identity", "work_type"), ("identity", "authority_state"),
+                   ("input_snapshot", "git"), ("input_snapshot", "manifest"), ("input_snapshot", "authority_refs"),
+                   *(("declared", k) for k in ("objective", "read_set", "expected_write_set", "interfaces", "exclusions",
+                                               "verification", "uncertainties", "dependencies")),
+                   *(("declared", "obligations", k) for k in OBLIGATION_KINDS),
+                   ("provenance", "declared_by"))
 
 URL = re.compile(r"\w+://\S+")
 REPO_PATH = re.compile(r"(?<![\w./-])((?:[\w.*-]+/)+[\w.*-]+|[\w-]+\.(?:md|rs|toml|json|py|txt|ya?ml|sh))(?![\w/])")
@@ -286,6 +292,28 @@ def manifest_listing(m, coverage):
     return listing, facts
 
 
+def structure_errors(p):
+    """Every required field must exist and carry one of the four statuses."""
+    errs = []
+    for path in REQUIRED_FIELDS:
+        node = p
+        for k in path:
+            node = node.get(k) if isinstance(node, dict) else None
+        name = ".".join(path)
+        if not isinstance(node, dict):
+            errs.append(f"{name}: required field missing")
+        elif node.get("status") not in STATUSES:
+            errs.append(f"{name}: status {node.get('status')!r} not in {STATUSES}")
+    if not isinstance(p.get("identity", {}).get("task_id"), str):
+        errs.append("identity.task_id: required string missing")
+    if not isinstance(p.get("provenance", {}).get("source_documents"), list):
+        errs.append("provenance.source_documents: required list missing")
+    snap = p.get("input_snapshot", {})
+    if all(isinstance(snap.get(k), dict) and snap[k].get("status") == "declared" for k in ("git", "manifest")):
+        errs.append("input_snapshot: git and manifest are both declared; declare exactly one snapshot")
+    return errs
+
+
 def walk_fields(obj, prefix=""):
     for k, v in obj.items():
         here = f"{prefix}{k}"
@@ -305,6 +333,9 @@ def count(field):
 
 
 def compute(sidecar, repo):
+    bad = [e for e in structure_errors(sidecar) if "both declared" not in e]
+    if bad:
+        raise ValueError("malformed sidecar: " + "; ".join(bad))
     p = json.loads(json.dumps(sidecar))
     coverage, computed = [], {}
     for name, f in list(walk_fields(p["identity"], "identity.")) + list(walk_fields(p["input_snapshot"], "input_snapshot.")) \
@@ -333,7 +364,11 @@ def compute(sidecar, repo):
     snap = {"kind": "none", "files": None, "bytes": None, "dirty_paths": None}
     listing = None
     git, man = p["input_snapshot"]["git"], p["input_snapshot"]["manifest"]
-    if git["status"] == "declared":
+    if git["status"] == "declared" and man["status"] == "declared":
+        snap = {"kind": "conflict", "files": None, "bytes": None, "dirty_paths": None}
+        coverage.append({"field": "input_snapshot", "status": "resolution_failure",
+                         "detail": "git and manifest are both declared; no snapshot used"})
+    elif git["status"] == "declared":
         listing = git_listing(repo, git["value"]["commit"], coverage)
         if listing is not None:
             snap = {"kind": "git", "files": len(listing), "bytes": sum(listing.values()), "dirty_paths": 0}
@@ -419,8 +454,10 @@ def compute(sidecar, repo):
 
     # context burden: what the role must read before writing
     parts = {"packet_bytes": computed["packet"]["bytes"], "authority_bytes": a["bytes"], "read_set_bytes": r["resolved_bytes"]}
+    read_gaps = (r["unresolved_items"] or 0) + (r["items_without_path"] or 0) if rs["status"] == "declared" else 0
     computed["context_burden"] = {"kind": "computed", "bytes_known": sum(x for x in parts.values() if x is not None),
-                                  "components": parts, "complete": all(x is not None for x in parts.values())}
+                                  "components": parts, "unresolved_read_items": read_gaps,
+                                  "complete": all(x is not None for x in parts.values()) and read_gaps == 0}
 
     # task revision: identifies what the profile is about, so profile and assignment records can be joined.
     # Same packet bytes against a different snapshot, or for a different role, is a different revision.
@@ -451,10 +488,17 @@ def write_manifest(root, patterns, out_dir):
     No timestamps are written, so the same bytes give the same manifest hash.
     """
     root = os.path.abspath(root)
-    files = []
+    out_abs = os.path.abspath(out_dir)
+    files, skipped = [], []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != ".git"]
-        files += [os.path.relpath(os.path.join(dirpath, f), root) for f in filenames]
+        dirnames[:] = [d for d in dirnames if d != ".git" and os.path.abspath(os.path.join(dirpath, d)) != out_abs
+                       and not os.path.isfile(os.path.join(dirpath, d, "baseline-manifest.json"))]  # earlier snapshots
+        for f in filenames:
+            full = os.path.join(dirpath, f)
+            if os.path.islink(full):
+                skipped.append(os.path.relpath(full, root))
+            else:
+                files.append(os.path.relpath(full, root))
     listing = {f: None for f in files}
     chosen = sorted({f for pat in patterns for f in resolve(pat, listing)})
     if not chosen:
@@ -474,6 +518,7 @@ def write_manifest(root, patterns, out_dir):
     status = subprocess.run(["git", "-C", root, "status", "--porcelain", "--"] + chosen, capture_output=True, text=True)
     doc = {"meaning": "working-tree bytes at capture; may include uncommitted changes",
            "files": entries,
+           "skipped_symlinks": sorted(skipped),
            "provenance": {"git_head_at_capture": head.stdout.strip() if head.returncode == 0 else None,
                           "manifest_path_git_status_porcelain": status.stdout.splitlines() if status.returncode == 0 else None}}
     path = os.path.join(out_dir, "baseline-manifest.json")
@@ -524,7 +569,9 @@ def check_value(name, v):
 
 def validate(p, production=False):
     """Structural and cross-field checks. production=True also requires full declarer provenance."""
-    errs = []
+    errs = structure_errors(p)
+    if any("required" in e for e in errs):
+        return errs
     if p.get("schema") != SCHEMA_ID:
         errs.append(f"schema must be {SCHEMA_ID}")
     stage = p.get("stage")
@@ -596,7 +643,11 @@ def main():
         p = ADAPTERS[args.adapter](empty_profile(args.task_id, args.stage, args.target_role, args.adapter), args.packet)
         dump(p, args.out)
     elif args.cmd == "compute":
-        dump(compute(read_json(args.sidecar), args.repo), args.out)
+        try:
+            dump(compute(read_json(args.sidecar), args.repo), args.out)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            sys.exit(2)
     elif args.cmd == "manifest":
         print(json.dumps(write_manifest(args.root, args.path, args.out_dir), indent=1, sort_keys=True))
     else:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 (2026-10-27)
+
+- **Required fields are validated explicitly.** A field with an unrecognised
+  status no longer escapes validation, and a missing required field is an error
+  from `compute` and `validate` instead of a `KeyError`.
+- **Declaring both a git and a manifest snapshot is rejected.** `compute`
+  previously used git silently.
+- **`context_burden.complete` is false when any read-set item is unresolved or
+  has no path,** and the new `unresolved_read_items` field counts them.
+- **`manifest` skips symlinked files** (listed under `skipped_symlinks`), its own
+  output folder, and folders holding an earlier `baseline-manifest.json`.
+
 ## 0.2.0 (2026-10-27)
 
 **The task-revision definition changed**, so revision IDs differ from 0.1.0 for

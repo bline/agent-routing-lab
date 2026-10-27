@@ -283,5 +283,52 @@ class TypeValidationTests(Fixture):
         self.assertTrue(any(x.startswith("identity.task_id") for x in e), e)
 
 
+class ReviewTwoTests(Fixture):
+    """Regressions for the second source review (v0.2.1)."""
+
+    def test_invalid_status_is_rejected(self):
+        s = self.contract_sidecar()
+        s["declared"]["interfaces"] = {"status": "maybe", "value": ["x"]}
+        errs = tp.validate(s)
+        self.assertTrue(any(e.startswith("declared.interfaces: status") for e in errs), errs)
+
+    def test_missing_required_field_is_an_error_not_a_crash(self):
+        s = self.contract_sidecar()
+        del s["declared"]["uncertainties"]
+        with self.assertRaises(ValueError):
+            tp.compute(s, self.repo)
+        self.assertIn("declared.uncertainties: required field missing", tp.validate(s))
+
+    def test_conflicting_snapshots(self):
+        s = self.contract_sidecar()
+        s["input_snapshot"]["git"] = tp.F("declared", {"commit": self.commit})
+        s["input_snapshot"]["manifest"] = tp.F("declared", {"path": "/x", "sha256": "0" * 64, "root": "/"})
+        p = tp.compute(s, self.repo)
+        self.assertEqual(p["computed"]["snapshot"]["kind"], "conflict")
+        self.assertTrue(any("both declared" in e for e in tp.validate(p)))
+
+    def test_unresolved_read_item_makes_context_incomplete(self):
+        s = self.contract_sidecar()
+        s["input_snapshot"]["git"] = tp.F("declared", {"commit": self.commit})
+        s["declared"]["read_set"] = tp.F("declared", [{"text": "missing", "path": "no/such/file.rs"}])
+        c = tp.compute(s, self.repo)["computed"]
+        self.assertEqual(c["context_burden"]["unresolved_read_items"], 1)
+        self.assertFalse(c["context_burden"]["complete"])
+
+    def test_manifest_skips_symlinks_and_its_own_output(self):
+        link = os.path.join(self.repo, "rust/crates/alpha/src/link.rs")
+        out = os.path.join(self.repo, "rust/crates/alpha/snapshot-out")
+        try:
+            os.symlink("/etc/hostname", link)
+            first = tp.read_json(tp.write_manifest(self.repo, ["rust/crates/alpha/**"], out)["path"])
+            second = tp.read_json(tp.write_manifest(self.repo, ["rust/crates/alpha/**"], out + "-2")["path"])
+        finally:
+            os.remove(link)
+            subprocess.run(["rm", "-rf", out, out + "-2"], check=True)
+        self.assertEqual(first["skipped_symlinks"], ["rust/crates/alpha/src/link.rs"])
+        for doc in (first, second):
+            self.assertFalse(any("snapshot-out" in k for k in doc["files"]), "snapshot output must not be captured")
+        self.assertEqual(sorted(first["files"]), sorted(second["files"]), "an earlier snapshot in the tree changes nothing")
+
 if __name__ == "__main__":
     unittest.main()
