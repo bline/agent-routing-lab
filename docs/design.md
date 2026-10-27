@@ -87,10 +87,29 @@ assignment is a separate record, joined to the profile by `task_revision` (see
 | `context_burden` | computed | known bytes of packet plus authority documents plus resolved read set; whether all components are known |
 | `packet` | text | bytes and words of the source documents |
 | `mentions` | text mention | crates, repository paths and commits mentioned in the packet text (weak, kept separate) |
-| `task_revision` | computed | `<task_id>@<16 hex>`: hash of the source documents' sha256 values |
+| `task_revision` | computed | `<task_id>@<16 hex>`: hash of schema, task_id, stage, target_role, the source documents' sha256 values and the snapshot identity (commit or manifest hash). The same packet at another snapshot, or for another role, is another revision. |
 
 Verification kinds: build, test, lint, format, fixture-oracle (executable);
 independent-review, manual (judgment); other.
+
+## Validation
+
+`taskprofile validate` checks structure and types, not truth:
+
+- `task_id` matches `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`, so it is safe as a file name.
+- Every field has a valid status, and `value` is present exactly when the status
+  is declared.
+- **Declared values have the right type:**
+  - lists of non-empty strings for the scope, obligation and list fields;
+  - `{text, path}` items for the read set;
+  - `{kind, text}` items with a known kind for verification;
+  - `{kind, path, sha256}` items for authority references;
+  - a 40-hex commit for git;
+  - `{path, sha256, root, copies_dir?}` for a manifest.
+- Every unknown declaration has a coverage entry.
+- Stage A declares nothing beyond the objective.
+- `--production` also requires the declarer's role, model, effort, harness and
+  guidance hash, plus at least one source document.
 
 ## Adapters
 

@@ -30,7 +30,7 @@ import subprocess
 import sys
 
 SCHEMA_ID = "task-profile/v0"
-EXTRACTOR = {"name": "taskprofile.py", "version": "0.1.0"}
+EXTRACTOR = {"name": "taskprofile.py", "version": "0.2.0"}
 STATUSES = ("declared", "none", "not_applicable", "unknown")
 WORK_TYPES = ("implementation", "planning", "investigation", "qualification", "review",
               "authority-preparation", "documentation", "other")
@@ -49,6 +49,11 @@ URL = re.compile(r"\w+://\S+")
 REPO_PATH = re.compile(r"(?<![\w./-])((?:[\w.*-]+/)+[\w.*-]+|[\w-]+\.(?:md|rs|toml|json|py|txt|ya?ml|sh))(?![\w/])")
 CRATE = re.compile(r"(?<![\w/-])rust/crates/([A-Za-z0-9_-]+)")
 COMMIT = re.compile(r"\b[0-9a-f]{40}\b")
+TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+HEX40 = re.compile(r"[0-9a-f]{40}\Z")
+HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+LIST_OF_STR = ("declared.expected_write_set", "declared.interfaces", "declared.exclusions", "declared.uncertainties",
+               "declared.dependencies") + tuple(f"declared.obligations.{k}" for k in OBLIGATION_KINDS)
 
 
 def F(status, value=None, basis=None):
@@ -417,11 +422,20 @@ def compute(sidecar, repo):
     computed["context_burden"] = {"kind": "computed", "bytes_known": sum(x for x in parts.values() if x is not None),
                                   "components": parts, "complete": all(x is not None for x in parts.values())}
 
-    # task revision: identifies the frozen packet bytes, so profile and assignment records can be joined
-    docs = sorted(d["sha256"] for d in p["provenance"]["source_documents"])
-    computed["task_revision"] = {"kind": "computed",
-                                 "id": f'{p["identity"]["task_id"]}@{hashlib.sha256(chr(10).join(docs).encode()).hexdigest()[:16]}'
-                                 if docs and verified_docs else None}
+    # task revision: identifies what the profile is about, so profile and assignment records can be joined.
+    # Same packet bytes against a different snapshot, or for a different role, is a different revision.
+    snap_identity = None
+    if git["status"] == "declared":
+        snap_identity = {"git": git["value"].get("commit")}
+    elif man["status"] == "declared":
+        snap_identity = {"manifest": man["value"].get("sha256")}
+    basis = {"schema": p.get("schema"), "task_id": p["identity"]["task_id"], "stage": p.get("stage"),
+             "target_role": p["identity"].get("target_role"),
+             "source_documents": sorted(d["sha256"] for d in p["provenance"]["source_documents"]),
+             "snapshot": snap_identity}
+    digest = hashlib.sha256(json.dumps(basis, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    computed["task_revision"] = {"kind": "computed", "id": f'{p["identity"]["task_id"]}@{digest}',
+                                 "basis": "schema, task_id, stage, target_role, source document sha256s, snapshot identity"}
 
     p["computed"] = computed
     p["coverage"] = sorted(coverage, key=lambda c: (c["field"], c["status"], c["detail"]))
@@ -472,6 +486,42 @@ def write_manifest(root, patterns, out_dir):
 PROVENANCE_KEYS = ("role", "model", "effort", "harness", "guidance_sha256")
 
 
+def _is_str(x):
+    return isinstance(x, str) and x.strip() != ""
+
+
+def check_value(name, v):
+    """Type errors in a declared value; [] when it is well formed."""
+    bad = lambda what: [f"{name}: {what}"]
+    if name in LIST_OF_STR:
+        return [] if isinstance(v, list) and all(_is_str(x) for x in v) else bad("must be a list of non-empty strings")
+    if name in ("declared.objective", "identity.parent_task_id"):
+        return [] if _is_str(v) else bad("must be a non-empty string")
+    if name == "identity.work_type":
+        return [] if v in WORK_TYPES else bad(f"{v!r} not in {WORK_TYPES}")
+    if name == "identity.authority_state":
+        return [] if v in AUTHORITY_STATES else bad(f"{v!r} not in {AUTHORITY_STATES}")
+    if name == "declared.read_set":
+        ok = isinstance(v, list) and all(isinstance(x, dict) and _is_str(x.get("text")) and (x.get("path") is None or _is_str(x.get("path"))) for x in v)
+        return [] if ok else bad("must be a list of {text: string, path: string or null}")
+    if name == "declared.verification":
+        ok = isinstance(v, list) and all(isinstance(x, dict) and x.get("kind") in VERIFY_KINDS and _is_str(x.get("text")) for x in v)
+        return [] if ok else bad(f"must be a list of {{kind: one of {VERIFY_KINDS}, text: string}}")
+    if name == "input_snapshot.authority_refs":
+        ok = isinstance(v, list) and all(isinstance(x, dict) and x.get("kind") in AUTHORITY_KINDS and _is_str(x.get("path"))
+                                         and isinstance(x.get("sha256"), str) and HEX64.match(x["sha256"]) for x in v)
+        return [] if ok else bad(f"must be a list of {{kind: one of {AUTHORITY_KINDS}, path, sha256: 64 hex}}")
+    if name == "input_snapshot.git":
+        return [] if isinstance(v, dict) and isinstance(v.get("commit"), str) and HEX40.match(v["commit"]) else bad("must be {commit: 40 lowercase hex}")
+    if name == "input_snapshot.manifest":
+        ok = (isinstance(v, dict) and _is_str(v.get("path")) and _is_str(v.get("root")) and isinstance(v.get("sha256"), str)
+              and HEX64.match(v["sha256"]) and (v.get("copies_dir") is None or _is_str(v.get("copies_dir"))))
+        return [] if ok else bad("must be {path, sha256: 64 hex, root, copies_dir?}")
+    if name == "provenance.declared_by":
+        return [] if isinstance(v, dict) and all(isinstance(x, str) for x in v.values()) else bad("must be an object of strings")
+    return []
+
+
 def validate(p, production=False):
     """Structural and cross-field checks. production=True also requires full declarer provenance."""
     errs = []
@@ -488,17 +538,16 @@ def validate(p, production=False):
             errs.append(f"{name}: bad status {f['status']}")
         if (f["status"] == "declared") != ("value" in f):
             errs.append(f"{name}: 'value' must be present exactly when status is declared")
-    wt, au = p["identity"]["work_type"], p["identity"]["authority_state"]
-    if wt["status"] == "declared" and wt["value"] not in WORK_TYPES:
-        errs.append(f"identity.work_type: {wt['value']} not in {WORK_TYPES}")
-    if au["status"] == "declared" and au["value"] not in AUTHORITY_STATES:
-        errs.append(f"identity.authority_state: {au['value']} not in {AUTHORITY_STATES}")
-    vf = p["declared"]["verification"]
-    if vf["status"] == "declared":
-        errs += [f"declared.verification: kind {c.get('kind')} not in {VERIFY_KINDS}" for c in vf["value"] if c.get("kind") not in VERIFY_KINDS]
-    ar = p["input_snapshot"]["authority_refs"]
-    if ar["status"] == "declared":
-        errs += [f"input_snapshot.authority_refs: kind {r.get('kind')} not in {AUTHORITY_KINDS}" for r in ar["value"] if r.get("kind") not in AUTHORITY_KINDS]
+    if not isinstance(p["identity"].get("task_id"), str) or not TASK_ID.match(p["identity"]["task_id"]):
+        errs.append("identity.task_id: must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+    for name, f in list(walk_fields(p["identity"], "identity.")) + list(walk_fields(p["input_snapshot"], "input_snapshot.")) \
+            + list(walk_fields(p["declared"], "declared.")) + list(walk_fields(p["provenance"], "provenance.")):
+        if f.get("status") == "declared" and "value" in f:
+            errs += check_value(name, f["value"])
+    for d in p["provenance"].get("source_documents", []):
+        if not (isinstance(d, dict) and _is_str(d.get("path")) and isinstance(d.get("sha256"), str) and HEX64.match(d["sha256"])
+                and isinstance(d.get("bytes"), int)):
+            errs.append("provenance.source_documents: each entry must be {path, sha256: 64 hex, bytes: int}")
     if stage == "A":
         for name, f in walk_fields(p["declared"], ""):
             if f["status"] != "unknown" and name not in STAGE_A_ALLOWED:

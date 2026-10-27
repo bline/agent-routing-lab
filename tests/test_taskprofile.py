@@ -241,5 +241,47 @@ class ValidatorTests(Fixture):
         self.assertEqual(tp.validate(t, production=True), [])
 
 
+class IdentityTests(Fixture):
+    def rev(self, sidecar):
+        return tp.compute(sidecar, self.repo)["computed"]["task_revision"]["id"]
+
+    def test_revision_depends_on_snapshot_and_role(self):
+        base = self.adapt("work-engine-shared-contract", [self.shared])
+        other = copy.deepcopy(base)
+        other["input_snapshot"]["git"] = tp.F("declared", {"commit": "f" * 40})
+        self.assertNotEqual(self.rev(base), self.rev(other), "same packet at another commit is another revision")
+        reviewer = copy.deepcopy(base)
+        reviewer["identity"]["target_role"] = "reviewer"
+        self.assertNotEqual(self.rev(base), self.rev(reviewer), "builder and reviewer profiles are separate revisions")
+
+    def test_revision_defined_without_source_documents(self):
+        s = self.contract_sidecar()
+        s["provenance"]["source_documents"] = []
+        self.assertRegex(self.rev(s), r"^contract@[0-9a-f]{16}$")
+
+
+class TypeValidationTests(Fixture):
+    def errs(self, mutate):
+        s = self.contract_sidecar()
+        mutate(s)
+        return tp.validate(tp.compute(s, self.repo))
+
+    def test_string_where_list_belongs(self):
+        e = self.errs(lambda s: s["declared"]["obligations"].__setitem__("acceptance", {"status": "declared", "value": "must pass"}))
+        self.assertTrue(any(x.startswith("declared.obligations.acceptance: must be a list") for x in e), e)
+
+    def test_malformed_commit_and_hash(self):
+        e = self.errs(lambda s: s["input_snapshot"].__setitem__("git", {"status": "declared", "value": {"commit": "HEAD"}}))
+        self.assertTrue(any(x.startswith("input_snapshot.git") for x in e), e)
+        e = self.errs(lambda s: s["input_snapshot"].__setitem__("authority_refs", {"status": "declared", "value": [{"kind": "contract", "path": "/x", "sha256": "abc"}]}))
+        self.assertTrue(any(x.startswith("input_snapshot.authority_refs") for x in e), e)
+
+    def test_bad_read_set_item_and_task_id(self):
+        e = self.errs(lambda s: s["declared"].__setitem__("read_set", {"status": "declared", "value": ["a plain string"]}))
+        self.assertTrue(any(x.startswith("declared.read_set") for x in e), e)
+        e = self.errs(lambda s: s["identity"].__setitem__("task_id", "has space/and slash"))
+        self.assertTrue(any(x.startswith("identity.task_id") for x in e), e)
+
+
 if __name__ == "__main__":
     unittest.main()
