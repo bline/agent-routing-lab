@@ -1,0 +1,141 @@
+{
+ "schema": "task-profile/v0",
+ "stage": "B",
+ "identity": {
+  "task_id": "<stable task name>",
+  "target_role": "builder",
+  "parent_task_id": {
+   "status": "unknown"
+  },
+  "work_type": {
+   "status": "declared",
+   "value": "implementation"
+  },
+  "authority_state": {
+   "status": "declared",
+   "value": "approved"
+  }
+ },
+ "input_snapshot": {
+  "git": {
+   "status": "declared",
+   "value": {
+    "commit": "<40-hex>"
+   }
+  },
+  "manifest": {
+   "status": "not_applicable"
+  },
+  "authority_refs": {
+   "status": "declared",
+   "value": [
+    {
+     "kind": "contract",
+     "path": "<abs path>",
+     "sha256": "<hex>"
+    }
+   ]
+  }
+ },
+ "declared": {
+  "objective": {
+   "status": "declared",
+   "value": "<one sentence>"
+  },
+  "read_set": {
+   "status": "declared",
+   "value": [
+    {
+     "text": "<item>",
+     "path": "<repo path or glob>"
+    }
+   ]
+  },
+  "expected_write_set": {
+   "status": "declared",
+   "value": [
+    "<repo path or glob>"
+   ]
+  },
+  "interfaces": {
+   "status": "declared",
+   "value": [
+    "<public interface changed>"
+   ]
+  },
+  "exclusions": {
+   "status": "declared",
+   "value": [
+    "<out of scope>"
+   ]
+  },
+  "verification": {
+   "status": "declared",
+   "value": [
+    {
+     "kind": "test",
+     "text": "<command or check>"
+    }
+   ]
+  },
+  "uncertainties": {
+   "status": "none"
+  },
+  "dependencies": {
+   "status": "declared",
+   "value": [
+    "<external service or repository>"
+   ]
+  },
+  "obligations": {
+   "acceptance": {
+    "status": "declared",
+    "value": [
+     "<acceptance obligation>"
+    ]
+   },
+   "state": {
+    "status": "unknown"
+   },
+   "persistence": {
+    "status": "declared",
+    "value": [
+     "<schema or compatibility requirement>"
+    ]
+   },
+   "recovery": {
+    "status": "declared",
+    "value": [
+     "<retry, rollback, cancellation or recovery obligation>"
+    ]
+   },
+   "compatibility": {
+    "status": "none"
+   }
+  }
+ },
+ "provenance": {
+  "adapter": {
+   "name": "sidecar",
+   "version": "0.1.0"
+  },
+  "declared_by": {
+   "status": "declared",
+   "value": {
+    "role": "coordinator",
+    "model": "<id>",
+    "effort": "<effort>",
+    "harness": "<name and version>",
+    "guidance_sha256": "<hex>"
+   }
+  },
+  "ignored_treatment_fields": [],
+  "source_documents": [
+   {
+    "path": "<frozen packet>",
+    "sha256": "<hex>",
+    "bytes": 0
+   }
+  ]
+ }
+}

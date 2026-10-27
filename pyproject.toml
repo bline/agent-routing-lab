@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-routing-lab"
+version = "0.1.0"
+description = "Deterministic task profiling, agent experiments, and model routing"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+taskprofile = "agent_routing_lab.taskprofile:main"
+
+[project.urls]
+Repository = "https://github.com/bline/agent-routing-lab"
+
+[tool.setuptools.packages.find]
+where = ["src"]
