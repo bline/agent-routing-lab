@@ -330,5 +330,18 @@ class ReviewTwoTests(Fixture):
             self.assertFalse(any("snapshot-out" in k for k in doc["files"]), "snapshot output must not be captured")
         self.assertEqual(sorted(first["files"]), sorted(second["files"]), "an earlier snapshot in the tree changes nothing")
 
+class PilotRoundOneTests(Fixture):
+    """Regressions from the Work Engine shadow pilot, round 1 (v0.2.2)."""
+
+    def test_manifest_without_root_is_an_error_not_a_crash(self):
+        s = self.contract_sidecar()
+        s["input_snapshot"]["git"] = tp.F("not_applicable")
+        s["input_snapshot"]["manifest"] = tp.F("declared", {"path": "/nonexistent/manifest.json", "sha256": "0" * 64}, "test")
+        prof = tp.compute(s, self.repo)   # recorded, not a KeyError
+        self.assertEqual(prof["computed"]["snapshot"]["kind"], "none")
+        self.assertTrue(any(c["field"] == "input_snapshot.manifest" and c["status"] == "resolution_failure" for c in prof["coverage"]))
+        self.assertTrue(any(e.startswith("input_snapshot.manifest") for e in tp.validate(prof)))
+
+
 if __name__ == "__main__":
     unittest.main()

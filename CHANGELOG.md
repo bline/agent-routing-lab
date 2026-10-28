@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 (2026-10-28)
+
+- **A malformed manifest no longer crashes `compute`.** A manifest missing `root`
+  raised `KeyError`. `compute` now records it as a `resolution_failure` coverage
+  entry with no snapshot used, and `validate` reports the field error, the same
+  way an unresolvable git commit is handled.
+
 ## 0.2.1 (2026-10-27)
 
 - **Required fields are validated explicitly.** A field with an unrecognised

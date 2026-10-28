@@ -372,6 +372,10 @@ def compute(sidecar, repo):
         listing = git_listing(repo, git["value"]["commit"], coverage)
         if listing is not None:
             snap = {"kind": "git", "files": len(listing), "bytes": sum(listing.values()), "dirty_paths": 0}
+    elif man["status"] == "declared" and check_value("input_snapshot.manifest", man["value"]):
+        # A malformed manifest is recorded as a resolution failure; validate reports the error.
+        coverage.append({"field": "input_snapshot.manifest", "status": "resolution_failure",
+                         "detail": "; ".join(check_value("input_snapshot.manifest", man["value"]))})
     elif man["status"] == "declared":
         listing, facts = manifest_listing(man["value"], coverage)
         if listing is not None:
@@ -465,7 +469,7 @@ def compute(sidecar, repo):
     if git["status"] == "declared":
         snap_identity = {"git": git["value"].get("commit")}
     elif man["status"] == "declared":
-        snap_identity = {"manifest": man["value"].get("sha256")}
+        snap_identity = {"manifest": man["value"].get("sha256") if isinstance(man["value"], dict) else None}
     basis = {"schema": p.get("schema"), "task_id": p["identity"]["task_id"], "stage": p.get("stage"),
              "target_role": p["identity"].get("target_role"),
              "source_documents": sorted(d["sha256"] for d in p["provenance"]["source_documents"]),
